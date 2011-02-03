@@ -104,28 +104,34 @@ module ActiveRecord
       # DATABASE STATEMENTS ======================================
 
       def execute(sql, name = nil) #:nodoc:
-        retries = 0
-        log(sql, "#{name} against #{@connection.host_info}") do
-          @connection.query(sql) 
-        end
-      rescue Mysql::Error => ex
-        if ex.message =~ /MySQL server has gone away/
-          if @retries && retries < @retries
-            retries += 1
-            disconnect!
-            connect
-            retry
+        have_reconnected = false
+        begin
+          log(sql, "#{name} against #{safe_host_info}") do
+            @connection.query(sql)
+          end
+        rescue ActiveRecord::StatementInvalid, Mysql::Error => ex
+          if ex.message.split(":").first =~ /Packets out of order/
+            raise ActiveRecord::StatementInvalid, "'Packets out of order' error was received from the database. Please update your mysql bindings (gem install mysql) and read http://dev.mysql.com/doc/mysql/en/password-hashing.html for more information.  If you're on Windows, use the Instant Rails installer to get the updated mysql bindings."
+          elsif ex.message =~ /MySQL server has gone away/ || ex.message =~ /not connected/
+            # try reconnecting once if the slave was simply disconnected
+            if !have_reconnected
+              have_reconnected = true
+              reconnect!
+              retry
+            end
+          
+            # if a query balanced to a slave fails because the slave has gone, retry the query on master
+            if @config[:failover_to_master] && @connection != @master
+              log(sql, "Connection to slave at #{safe_host_info} failed -- trying master")
+              @connection.close
+              @connection = @master
+              retry
+            else
+              raise
+            end
           else
             raise
           end
-        else
-          raise
-        end
-      rescue ActiveRecord::StatementInvalid => exception
-        if exception.message.split(":").first =~ /Packets out of order/
-          raise ActiveRecord::StatementInvalid, "'Packets out of order' error was received from the database. Please update your mysql bindings (gem install mysql) and read http://dev.mysql.com/doc/mysql/en/password-hashing.html for more information.  If you're on Windows, use the Instant Rails installer to get the updated mysql bindings."
-        else
-          raise
         end
       end
 
@@ -213,18 +219,29 @@ module ActiveRecord
             # Note - the instances aren't being replaced. This is critical,
             # as otherwise the current connection could end up pointed at a 
             # bad connection object in the case of a failure.
-            setup_connection(clone, 
-              [
-                config["host"], 
-                config["username"], config["password"], 
-                config["database"], config["port"], config["socket"]
-              ]
-            )
+            begin
+              setup_connection(clone, 
+                [
+                  config["host"], 
+                  config["username"], config["password"], 
+                  config["database"], config["port"], config["socket"]
+                ]
+              )
+            rescue => ex
+              # it's only OK for clone connections to fail if we will be failing over -- otherwise, should raise early
+              raise ex unless @config[:failover_to_master]
+            end
           end
         else
           # warning, no slaves specified.
           warn "Warning: MysqlReplicationAdapter in use, but no slave database connections specified."
         end
+      end
+      
+      def safe_host_info
+        @connection.host_info
+      rescue
+        "(unknown)"
       end
       
     end
