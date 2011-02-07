@@ -19,7 +19,7 @@ module ActiveRecord
     class AbstractAdapter
       # Adding this method allows non-mysql-replication adapter applications to function without changing
       # code. Useful in development and test.
-      def load_balance_query
+      def load_balance_query(use_slave=true)
         yield
       end
     end
@@ -68,18 +68,20 @@ module ActiveRecord
       end
 
       # the magic load_balance method
-      def load_balance_query
+      # pass use_slave=false to do the opposite (force master within the block)
+      def load_balance_query(use_slave=true)
         old_connection = @connection
-        @connection = select_clone
+        @connection = select_clone(use_slave)
         yield
       ensure
         @connection = old_connection
       end
 
       # choose a random clone to use for the moment
-      def select_clone
+      def select_clone(use_slave=true)
         # if we happen not to be connected to any clones, just use the master
-        return @master if @clones.nil? || @clones.empty? 
+        # or explicitly pass use_slave = false to force master
+        return @master if @clones.nil? || @clones.empty? || use_slave == false
         # return a random clone
         return @clones[rand(@clones.size)]
       end

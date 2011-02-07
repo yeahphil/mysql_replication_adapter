@@ -46,11 +46,11 @@ module ActiveRecord
       # load_balance_query, and another 5% overhead to invoking this run_on method with the yield.
       def run_on_db(use_slave = nil)
 #        logger.debug("checking conn.  use_slave? #{use_slave} in trans? #{Thread.current['open_transactions']}") if logger && logger.debug
-        if (use_slave && 
+        if (!use_slave.nil? && 
             connection.is_a?(ConnectionAdapters::MysqlReplicationAdapter) && 
             (Thread.current['open_transactions'] || 0) == 0)
 
-          connection.load_balance_query { yield }
+          connection.load_balance_query(use_slave) { yield }
         else
           yield
         end
@@ -58,14 +58,16 @@ module ActiveRecord
 
       def slave_valid(use_slave = nil)
 #        logger.debug("checking conn.  use_slave? #{use_slave} in trans? #{Thread.current['open_transactions']}") if logger && logger.debug
-        use_slave && 
+        !use_slave.nil? && 
           connection.is_a?(ConnectionAdapters::MysqlReplicationAdapter) && 
           (Thread.current['open_transactions'] || 0) == 0
       end
 
       def get_use_slave(arg)
-        if arg && arg.is_a?(Hash) then return arg[:use_slave]
-        else return arg
+        if arg && arg.is_a?(Hash)
+          return arg[:use_slave]
+        else
+          return arg
         end
       end
 
@@ -77,7 +79,7 @@ module ActiveRecord
 #          old_find_every(options)
 #        end
         if slave_valid(options[:use_slave]) 
-          connection.load_balance_query { old_find_every(options) }
+          connection.load_balance_query(options[:use_slave]) { old_find_every(options) }
         else
           old_find_every(options)
         end
@@ -85,13 +87,13 @@ module ActiveRecord
       
       alias_method :old_find_by_sql, :find_by_sql
       # Override find_by_sql so that you can tell it to selectively use a slave machine
-      def find_by_sql(sql, use_slave = false)
+      def find_by_sql(sql, use_slave = nil)
         use_slave = get_use_slave(use_slave)
 #        run_on_db(use_slave) do
 #          old_find_by_sql sql
 #        end
         if slave_valid(use_slave)
-          connection.load_balance_query { old_find_by_sql sql }
+          connection.load_balance_query(use_slave) { old_find_by_sql sql }
         else
           old_find_by_sql sql
         end
@@ -104,7 +106,7 @@ module ActiveRecord
 #          old_count_by_sql sql
 #        end
         if slave_valid(use_slave)
-          connection.load_balance_query { old_count_by_sql sql }
+          connection.load_balance_query(use_slave) { old_count_by_sql sql }
         else
           old_count_by_sql sql
         end
@@ -118,7 +120,7 @@ module ActiveRecord
 #          old_calculate(operation, column_name, options)
 #        end
         if slave_valid(use_slave)
-          connection.load_balance_query { old_calculate(operation, column_name, options) }
+          connection.load_balance_query(use_slave) { old_calculate(operation, column_name, options) }
         else
           old_calculate(operation, column_name, options)
         end
